@@ -1,4 +1,5 @@
 from easyapply.gmail_client import get_gmail_service
+from easyapply.sheets_client import sync_applications_to_sheet
 from easyapply.email_scanner import find_application_emails
 from easyapply.email_reader import get_email_body
 from easyapply.classifier import classify_email
@@ -76,7 +77,12 @@ def main():
             )
 
     applications = build_applications(results)
+    spreadsheet_id = sync_applications_to_sheet(
+    applications)
 
+    print()
+    print("Google Sheet updated!")
+    print("https://docs.google.com/spreadsheets/d/"+ spreadsheet_id)
     print()
     print("=" * 75)
     print("INTERNSHIP APPLICATIONS")
