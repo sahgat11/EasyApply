@@ -2,12 +2,23 @@ from easyapply.gmail_client import get_gmail_service
 from easyapply.email_scanner import find_application_emails
 from easyapply.email_reader import get_email_body
 from easyapply.classifier import classify_email
+from easyapply.database import (
+    initialize_database,
+    get_classification,
+    save_classification,
+)
+from easyapply.application_tracker import build_applications
 
 
 def main():
+    initialize_database()
+
     service = get_gmail_service()
 
-    profile = service.users().getProfile(userId="me").execute()
+    profile = service.users().getProfile(
+        userId="me"
+    ).execute()
+
     user_email = profile["emailAddress"]
 
     print("Connected to Gmail!")
@@ -20,29 +31,80 @@ def main():
         max_results=200
     )
 
-    print(f"Found {len(emails)} candidate emails.")
-    print("Testing AI classification on the 5 most recent...\n")
+    print(f"Found {len(emails)} candidate emails.\n")
 
-    for email in emails[:5]:
-        print("=" * 70)
-        print("Subject:", email["subject"])
+    results = []
 
-        body = get_email_body(service, email["id"])
+    for index, email in enumerate(emails, start=1):
+        print(
+            f"[{index}/{len(emails)}] "
+            f"{email['subject'][:65]}"
+        )
 
-        classification = classify_email(email, body)
+        classification = get_classification(
+            email["id"]
+        )
 
-        if classification:
-            print("Company:", classification.get("company"))
-            print("Role:", classification.get("role"))
-            print("Stage:", classification.get("stage"))
-            print("Status:", classification.get("status"))
-            print("Next action:", classification.get("next_action"))
-            print(
-                "Application update:",
-                classification.get("is_application_update")
+        if classification is None:
+            body = get_email_body(
+                service,
+                email["id"]
             )
 
+            classification = classify_email(
+                email,
+                body
+            )
+
+            if classification:
+                save_classification(
+                    email,
+                    classification
+                )
+
+                print("  Classified with Groq")
+
+        else:
+            print("  Using cached classification")
+
+        if classification:
+            results.append(
+                {
+                    "email": email,
+                    "classification": classification
+                }
+            )
+
+    applications = build_applications(results)
+
+    print()
+    print("=" * 75)
+    print("INTERNSHIP APPLICATIONS")
+    print("=" * 75)
+
+    for application in applications:
         print()
+        print("Company:", application["company"])
+        print(
+            "Role:",
+            application["role"] or "Unknown"
+        )
+        print("Stage:", application["stage"])
+        print("Status:", application["status"])
+        print(
+            "Next Action:",
+            application["next_action"] or "None"
+        )
+        print(
+            "Emails:",
+            application["email_count"]
+        )
+
+    print()
+    print(
+        f"Total unique applications: "
+        f"{len(applications)}"
+    )
 
 
 if __name__ == "__main__":
