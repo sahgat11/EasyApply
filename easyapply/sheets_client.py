@@ -1,4 +1,4 @@
-import os
+from datetime import datetime
 from pathlib import Path
 
 from google.oauth2.credentials import Credentials
@@ -38,7 +38,7 @@ def get_or_create_spreadsheet(service):
         if spreadsheet_id:
             return spreadsheet_id
 
-    # Create a new spreadsheet
+    # Create spreadsheet the first time
     spreadsheet = (
         service.spreadsheets()
         .create(
@@ -124,7 +124,7 @@ def sync_applications_to_sheet(applications):
 
     rows = build_rows(applications)
 
-    # Clear old data
+    # Clear old application data
     (
         service.spreadsheets()
         .values()
@@ -136,7 +136,7 @@ def sync_applications_to_sheet(applications):
         .execute()
     )
 
-    # Write fresh data
+    # Write current application data
     (
         service.spreadsheets()
         .values()
@@ -159,12 +159,28 @@ def sync_applications_to_sheet(applications):
         .execute()
     )
 
-    sheet_id = spreadsheet["sheets"][0]["properties"]["sheetId"]
+    sheet_id = None
+
+    for sheet in spreadsheet["sheets"]:
+        if sheet["properties"]["title"] == "Sheet1":
+            sheet_id = sheet["properties"]["sheetId"]
+            break
+
+    if sheet_id is None:
+        raise RuntimeError(
+            "Could not find Sheet1 in spreadsheet."
+        )
 
     format_sheet(
         service,
         spreadsheet_id,
         sheet_id,
+        applications
+    )
+
+    update_dashboard(
+        service,
+        spreadsheet_id,
         applications
     )
 
@@ -180,7 +196,7 @@ def format_sheet(
     row_count = len(applications) + 1
 
     requests = [
-        # Freeze the header
+        # Freeze header
         {
             "updateSheetProperties": {
                 "properties": {
@@ -193,7 +209,7 @@ def format_sheet(
             }
         },
 
-        # Header formatting
+        # Header styling
         {
             "repeatCell": {
                 "range": {
@@ -226,7 +242,7 @@ def format_sheet(
             }
         },
 
-        # Default body formatting
+        # Body formatting
         {
             "repeatCell": {
                 "range": {
@@ -449,19 +465,21 @@ def format_sheet(
             }
         )
 
-        # Color status
+        # Status coloring
         if application["status"] == "CLOSED":
             status_color = {
                 "red": 0.96,
                 "green": 0.75,
                 "blue": 0.75,
             }
+
         elif application["status"] == "ACTIVE":
             status_color = {
                 "red": 0.80,
                 "green": 0.93,
                 "blue": 0.80,
             }
+
         else:
             status_color = {
                 "red": 0.90,
@@ -492,6 +510,313 @@ def format_sheet(
                 }
             }
         )
+
+    (
+        service.spreadsheets()
+        .batchUpdate(
+            spreadsheetId=spreadsheet_id,
+            body={
+                "requests": requests
+            }
+        )
+        .execute()
+    )
+
+
+def update_dashboard(
+    service,
+    spreadsheet_id,
+    applications
+):
+    spreadsheet = (
+        service.spreadsheets()
+        .get(
+            spreadsheetId=spreadsheet_id
+        )
+        .execute()
+    )
+
+    dashboard_sheet = None
+
+    for sheet in spreadsheet["sheets"]:
+        if (
+            sheet["properties"]["title"]
+            == "Dashboard"
+        ):
+            dashboard_sheet = sheet
+            break
+
+    # Create Dashboard if it does not exist
+    if dashboard_sheet is None:
+        result = (
+            service.spreadsheets()
+            .batchUpdate(
+                spreadsheetId=spreadsheet_id,
+                body={
+                    "requests": [
+                        {
+                            "addSheet": {
+                                "properties": {
+                                    "title": "Dashboard",
+                                    "index": 0
+                                }
+                            }
+                        }
+                    ]
+                }
+            )
+            .execute()
+        )
+
+        dashboard_sheet = (
+            result["replies"][0]["addSheet"]
+        )
+
+    dashboard_id = (
+        dashboard_sheet["properties"]["sheetId"]
+    )
+
+    total = len(applications)
+
+    active = sum(
+        1
+        for app in applications
+        if app["status"] == "ACTIVE"
+    )
+
+    applied = sum(
+        1
+        for app in applications
+        if app["stage"] == "APPLIED"
+    )
+
+    assessments = sum(
+        1
+        for app in applications
+        if app["stage"] == "ONLINE_ASSESSMENT"
+    )
+
+    interviews = sum(
+        1
+        for app in applications
+        if app["stage"] in {
+            "RECRUITER_SCREEN",
+            "TECHNICAL_INTERVIEW",
+            "FINAL_INTERVIEW",
+        }
+    )
+
+    offers = sum(
+        1
+        for app in applications
+        if app["stage"] == "OFFER"
+    )
+
+    rejected = sum(
+        1
+        for app in applications
+        if app["stage"] == "REJECTED"
+    )
+
+    unknown = sum(
+        1
+        for app in applications
+        if app["stage"] == "UNKNOWN"
+    )
+
+    action_needed = sum(
+        1
+        for app in applications
+        if (
+            app["next_action"]
+            and app["status"] == "ACTIVE"
+        )
+    )
+
+    rows = [
+        ["EasyApply Dashboard", ""],
+        ["Summer 2027 Internship Tracker", ""],
+        [
+            "Last Sync",
+            datetime.now().strftime(
+                "%b %d, %Y %I:%M %p"
+            )
+        ],
+        ["", ""],
+        ["Metric", "Count"],
+        ["Total Applications", total],
+        ["Active", active],
+        ["Applied", applied],
+        ["Online Assessments", assessments],
+        ["Interviews", interviews],
+        ["Offers", offers],
+        ["Rejected", rejected],
+        ["Unknown", unknown],
+        ["Action Needed", action_needed],
+    ]
+
+    # Clear old dashboard values
+    (
+        service.spreadsheets()
+        .values()
+        .clear(
+            spreadsheetId=spreadsheet_id,
+            range="Dashboard!A:Z",
+            body={}
+        )
+        .execute()
+    )
+
+    # Write dashboard
+    (
+        service.spreadsheets()
+        .values()
+        .update(
+            spreadsheetId=spreadsheet_id,
+            range="Dashboard!A1",
+            valueInputOption="RAW",
+            body={
+                "values": rows
+            }
+        )
+        .execute()
+    )
+
+    requests = [
+        # Dashboard title
+        {
+            "repeatCell": {
+                "range": {
+                    "sheetId": dashboard_id,
+                    "startRowIndex": 0,
+                    "endRowIndex": 1,
+                    "startColumnIndex": 0,
+                    "endColumnIndex": 2,
+                },
+                "cell": {
+                    "userEnteredFormat": {
+                        "backgroundColor": {
+                            "red": 0.12,
+                            "green": 0.20,
+                            "blue": 0.32,
+                        },
+                        "textFormat": {
+                            "bold": True,
+                            "fontSize": 18,
+                            "foregroundColor": {
+                                "red": 1,
+                                "green": 1,
+                                "blue": 1,
+                            },
+                        }
+                    }
+                },
+                "fields": "userEnteredFormat"
+            }
+        },
+
+        # Metric header
+        {
+            "repeatCell": {
+                "range": {
+                    "sheetId": dashboard_id,
+                    "startRowIndex": 4,
+                    "endRowIndex": 5,
+                    "startColumnIndex": 0,
+                    "endColumnIndex": 2,
+                },
+                "cell": {
+                    "userEnteredFormat": {
+                        "backgroundColor": {
+                            "red": 0.75,
+                            "green": 0.82,
+                            "blue": 0.92,
+                        },
+                        "textFormat": {
+                            "bold": True
+                        }
+                    }
+                },
+                "fields": "userEnteredFormat"
+            }
+        },
+
+        # Metric labels
+        {
+            "repeatCell": {
+                "range": {
+                    "sheetId": dashboard_id,
+                    "startRowIndex": 5,
+                    "endRowIndex": 14,
+                    "startColumnIndex": 0,
+                    "endColumnIndex": 1,
+                },
+                "cell": {
+                    "userEnteredFormat": {
+                        "textFormat": {
+                            "bold": True
+                        }
+                    }
+                },
+                "fields": "userEnteredFormat"
+            }
+        },
+
+        # Count styling
+        {
+            "repeatCell": {
+                "range": {
+                    "sheetId": dashboard_id,
+                    "startRowIndex": 5,
+                    "endRowIndex": 14,
+                    "startColumnIndex": 1,
+                    "endColumnIndex": 2,
+                },
+                "cell": {
+                    "userEnteredFormat": {
+                        "horizontalAlignment": "CENTER",
+                        "textFormat": {
+                            "bold": True,
+                            "fontSize": 14
+                        }
+                    }
+                },
+                "fields": "userEnteredFormat"
+            }
+        },
+
+        # Column A width
+        {
+            "updateDimensionProperties": {
+                "range": {
+                    "sheetId": dashboard_id,
+                    "dimension": "COLUMNS",
+                    "startIndex": 0,
+                    "endIndex": 1,
+                },
+                "properties": {
+                    "pixelSize": 230
+                },
+                "fields": "pixelSize"
+            }
+        },
+
+        # Column B width
+        {
+            "updateDimensionProperties": {
+                "range": {
+                    "sheetId": dashboard_id,
+                    "dimension": "COLUMNS",
+                    "startIndex": 1,
+                    "endIndex": 2,
+                },
+                "properties": {
+                    "pixelSize": 170
+                },
+                "fields": "pixelSize"
+            }
+        },
+    ]
 
     (
         service.spreadsheets()

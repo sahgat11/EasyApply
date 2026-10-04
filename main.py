@@ -1,5 +1,6 @@
+import argparse
+
 from easyapply.gmail_client import get_gmail_service
-from easyapply.sheets_client import sync_applications_to_sheet
 from easyapply.email_scanner import find_application_emails
 from easyapply.email_reader import get_email_body
 from easyapply.classifier import classify_email
@@ -9,9 +10,10 @@ from easyapply.database import (
     save_classification,
 )
 from easyapply.application_tracker import build_applications
+from easyapply.sheets_client import sync_applications_to_sheet
 
 
-def main():
+def load_applications(verbose=False):
     initialize_database()
 
     service = get_gmail_service()
@@ -22,31 +24,34 @@ def main():
 
     user_email = profile["emailAddress"]
 
-    print("Connected to Gmail!")
-    print("Email:", user_email)
-    print()
-
     emails = find_application_emails(
         service,
         user_email=user_email,
         max_results=200
     )
 
-    print(f"Found {len(emails)} candidate emails.\n")
-
     results = []
 
-    for index, email in enumerate(emails, start=1):
-        print(
-            f"[{index}/{len(emails)}] "
-            f"{email['subject'][:65]}"
-        )
+    new_classifications = 0
+    cached_classifications = 0
+    ignored_emails = 0
 
+    for index, email in enumerate(
+        emails,
+        start=1
+    ):
         classification = get_classification(
             email["id"]
         )
 
         if classification is None:
+            if verbose:
+                print(
+                    f"[{index}/{len(emails)}] "
+                    f"Processing: "
+                    f"{email['subject'][:60]}"
+                )
+
             body = get_email_body(
                 service,
                 email["id"]
@@ -63,54 +68,175 @@ def main():
                     classification
                 )
 
-                print("  Classified with Groq")
+                new_classifications += 1
 
         else:
-            print("  Using cached classification")
+            cached_classifications += 1
 
-        if classification:
-            results.append(
-                {
-                    "email": email,
-                    "classification": classification
-                }
-            )
+        if not classification:
+            continue
 
-    applications = build_applications(results)
+        if not classification.get(
+            "is_application_update"
+        ):
+            ignored_emails += 1
+
+        results.append(
+            {
+                "email": email,
+                "classification": classification
+            }
+        )
+
+    applications = build_applications(
+        results
+    )
+
+    stats = {
+        "emails_scanned": len(emails),
+        "new_classifications": new_classifications,
+        "cached_classifications": cached_classifications,
+        "ignored_emails": ignored_emails,
+        "applications": len(applications),
+    }
+
+    return applications, stats
+
+
+def sync():
+    print()
+    print("EasyApply Sync")
+    print("=" * 40)
+
+    applications, stats = load_applications(
+        verbose=True
+    )
+
     spreadsheet_id = sync_applications_to_sheet(
-    applications)
+        applications
+    )
 
     print()
-    print("Google Sheet updated!")
-    print("https://docs.google.com/spreadsheets/d/"+ spreadsheet_id)
+    print("Sync complete")
+    print("-" * 40)
+
+    print(
+        f"Emails scanned:       "
+        f"{stats['emails_scanned']}"
+    )
+
+    print(
+        f"New emails processed: "
+        f"{stats['new_classifications']}"
+    )
+
+    print(
+        f"Cached emails:        "
+        f"{stats['cached_classifications']}"
+    )
+
+    print(
+        f"Applications tracked: "
+        f"{stats['applications']}"
+    )
+
     print()
-    print("=" * 75)
-    print("INTERNSHIP APPLICATIONS")
-    print("=" * 75)
+    print("Google Sheet:")
+
+    print(
+        "https://docs.google.com/spreadsheets/d/"
+        + spreadsheet_id
+    )
+
+
+def list_applications():
+    print()
+    print("EasyApply Applications")
+    print("=" * 70)
+
+    applications, stats = load_applications(
+        verbose=False
+    )
+
+    stage_order = {
+        "OFFER": 0,
+        "FINAL_INTERVIEW": 1,
+        "TECHNICAL_INTERVIEW": 2,
+        "RECRUITER_SCREEN": 3,
+        "ONLINE_ASSESSMENT": 4,
+        "APPLIED": 5,
+        "UNKNOWN": 6,
+        "REJECTED": 7,
+        "WITHDRAWN": 8,
+    }
+
+    applications = sorted(
+        applications,
+        key=lambda app: (
+            stage_order.get(
+                app["stage"],
+                99
+            ),
+            app["company"].lower()
+        )
+    )
 
     for application in applications:
+        company = application["company"]
+        role = (
+            application["role"]
+            or "Unknown"
+        )
+
+        stage = application["stage"]
+
+        next_action = (
+            application["next_action"]
+            or "-"
+        )
+
         print()
-        print("Company:", application["company"])
+        print(company)
+        print(f"  Role:        {role}")
+        print(f"  Stage:       {stage}")
         print(
-            "Role:",
-            application["role"] or "Unknown"
-        )
-        print("Stage:", application["stage"])
-        print("Status:", application["status"])
-        print(
-            "Next Action:",
-            application["next_action"] or "None"
-        )
-        print(
-            "Emails:",
-            application["email_count"]
+            f"  Next Action: "
+            f"{next_action}"
         )
 
     print()
     print(
-        f"Total unique applications: "
-        f"{len(applications)}"
+        f"{stats['applications']} "
+        f"total applications"
     )
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description=(
+            "AI-powered internship "
+            "application tracker"
+        )
+    )
+
+    parser.add_argument(
+        "command",
+        nargs="?",
+        default="sync",
+        choices=[
+            "sync",
+            "list",
+        ],
+        help="Command to run"
+    )
+
+    args = parser.parse_args()
+
+    if args.command == "sync":
+        sync()
+
+    elif args.command == "list":
+        list_applications()
 
 
 if __name__ == "__main__":
