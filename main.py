@@ -1,28 +1,51 @@
 import argparse
 
-from easyapply.gmail_client import get_gmail_service
-from easyapply.email_scanner import find_application_emails
-from easyapply.email_reader import get_email_body
-from easyapply.classifier import classify_email
+from easyapply.gmail_client import (
+    get_gmail_service
+)
+from easyapply.email_scanner import (
+    find_application_emails
+)
+from easyapply.email_reader import (
+    get_email_body
+)
+from easyapply.classifier import (
+    classify_email
+)
 from easyapply.database import (
     initialize_database,
     get_classification,
     save_classification,
 )
-from easyapply.application_tracker import build_applications
-from easyapply.sheets_client import sync_applications_to_sheet
+from easyapply.application_tracker import (
+    build_applications
+)
+from easyapply.sheets_client import (
+    sync_applications_to_sheet
+)
 
 
-def load_applications(verbose=False):
+def load_applications(
+    verbose=False,
+    force_refresh=False
+):
     initialize_database()
 
     service = get_gmail_service()
 
-    profile = service.users().getProfile(
-        userId="me"
-    ).execute()
+    profile = (
+        service.users()
+        .getProfile(
+            userId="me"
+        )
+        .execute(
+            num_retries=5
+        )
+    )
 
-    user_email = profile["emailAddress"]
+    user_email = (
+        profile["emailAddress"]
+    )
 
     emails = find_application_emails(
         service,
@@ -40,16 +63,21 @@ def load_applications(verbose=False):
         emails,
         start=1
     ):
-        classification = get_classification(
-            email["id"]
-        )
+        classification = None
+
+        if not force_refresh:
+            classification = (
+                get_classification(
+                    email["id"]
+                )
+            )
 
         if classification is None:
             if verbose:
                 print(
                     f"[{index}/{len(emails)}] "
                     f"Processing: "
-                    f"{email['subject'][:60]}"
+                    f"{email['subject'][:55]}"
                 )
 
             body = get_email_body(
@@ -57,9 +85,11 @@ def load_applications(verbose=False):
                 email["id"]
             )
 
-            classification = classify_email(
-                email,
-                body
+            classification = (
+                classify_email(
+                    email,
+                    body
+                )
             )
 
             if classification:
@@ -84,20 +114,34 @@ def load_applications(verbose=False):
         results.append(
             {
                 "email": email,
-                "classification": classification
+                "classification": (
+                    classification
+                )
             }
         )
 
-    applications = build_applications(
-        results
+    applications = (
+        build_applications(
+            results
+        )
     )
 
     stats = {
-        "emails_scanned": len(emails),
-        "new_classifications": new_classifications,
-        "cached_classifications": cached_classifications,
-        "ignored_emails": ignored_emails,
-        "applications": len(applications),
+        "emails_scanned": (
+            len(emails)
+        ),
+        "new_classifications": (
+            new_classifications
+        ),
+        "cached_classifications": (
+            cached_classifications
+        ),
+        "ignored_emails": (
+            ignored_emails
+        ),
+        "applications": (
+            len(applications)
+        ),
     }
 
     return applications, stats
@@ -108,12 +152,16 @@ def sync():
     print("EasyApply Sync")
     print("=" * 40)
 
-    applications, stats = load_applications(
-        verbose=True
+    applications, stats = (
+        load_applications(
+            verbose=True
+        )
     )
 
-    spreadsheet_id = sync_applications_to_sheet(
-        applications
+    spreadsheet_id = (
+        sync_applications_to_sheet(
+            applications
+        )
     )
 
     print()
@@ -144,18 +192,87 @@ def sync():
     print("Google Sheet:")
 
     print(
-        "https://docs.google.com/spreadsheets/d/"
+        "https://docs.google.com/"
+        "spreadsheets/d/"
+        + spreadsheet_id
+    )
+
+
+def refresh():
+    print()
+    print(
+        "EasyApply Deadline Refresh"
+    )
+    print("=" * 40)
+
+    print(
+        "Reprocessing existing emails "
+        "to extract deadlines..."
+    )
+    print()
+
+    applications, stats = (
+        load_applications(
+            verbose=True,
+            force_refresh=True
+        )
+    )
+
+    spreadsheet_id = (
+        sync_applications_to_sheet(
+            applications
+        )
+    )
+
+    deadlines = sum(
+        1
+        for application
+        in applications
+        if application.get(
+            "deadline"
+        )
+    )
+
+    print()
+    print("Refresh complete")
+    print("-" * 40)
+
+    print(
+        f"Emails reprocessed:   "
+        f"{stats['new_classifications']}"
+    )
+
+    print(
+        f"Applications tracked: "
+        f"{stats['applications']}"
+    )
+
+    print(
+        f"Deadlines found:      "
+        f"{deadlines}"
+    )
+
+    print()
+    print("Google Sheet:")
+
+    print(
+        "https://docs.google.com/"
+        "spreadsheets/d/"
         + spreadsheet_id
     )
 
 
 def list_applications():
     print()
-    print("EasyApply Applications")
+    print(
+        "EasyApply Applications"
+    )
     print("=" * 70)
 
-    applications, stats = load_applications(
-        verbose=False
+    applications, stats = (
+        load_applications(
+            verbose=False
+        )
     )
 
     stage_order = {
@@ -177,34 +294,63 @@ def list_applications():
                 app["stage"],
                 99
             ),
-            app["company"].lower()
+            app[
+                "company"
+            ].lower()
         )
     )
 
     for application in applications:
-        company = application["company"]
+        company = (
+            application["company"]
+        )
+
         role = (
             application["role"]
             or "Unknown"
         )
 
-        stage = application["stage"]
+        stage = (
+            application["stage"]
+        )
 
         next_action = (
             application["next_action"]
             or "-"
         )
 
+        deadline = (
+            application.get(
+                "deadline"
+            )
+            or "-"
+        )
+
         print()
         print(company)
-        print(f"  Role:        {role}")
-        print(f"  Stage:       {stage}")
+
+        print(
+            f"  Role:        "
+            f"{role}"
+        )
+
+        print(
+            f"  Stage:       "
+            f"{stage}"
+        )
+
         print(
             f"  Next Action: "
             f"{next_action}"
         )
 
+        print(
+            f"  Deadline:    "
+            f"{deadline}"
+        )
+
     print()
+
     print(
         f"{stats['applications']} "
         f"total applications"
@@ -226,6 +372,7 @@ def main():
         choices=[
             "sync",
             "list",
+            "refresh",
         ],
         help="Command to run"
     )
@@ -237,6 +384,9 @@ def main():
 
     elif args.command == "list":
         list_applications()
+
+    elif args.command == "refresh":
+        refresh()
 
 
 if __name__ == "__main__":

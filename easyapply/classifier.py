@@ -99,14 +99,29 @@ Rules:
 14. If no action is explicitly requested:
     next_action = null
 
-15. Do not use vague actions like:
+15. Do not use vague actions such as:
     "Wait for response"
     "Review application"
     "Prepare for interview"
 
-16. If company or role cannot be determined, use null.
+16. deadline must ONLY be populated if the email explicitly states
+    a date or deadline for the candidate to complete an action.
 
-17. is_application_update = false for:
+17. deadline must use YYYY-MM-DD format.
+
+18. If the email says a deadline such as:
+    "October 8, 2026"
+    return:
+    "2026-10-08"
+
+19. If no explicit deadline is stated:
+    deadline = null
+
+20. Do NOT infer deadlines from the email date.
+
+21. If company or role cannot be determined, use null.
+
+22. is_application_update = false for:
     newsletters,
     job alerts,
     advertisements,
@@ -118,13 +133,16 @@ Rules:
 
 Return ONLY valid JSON.
 
+Return exactly these fields:
+
 {{
     "is_application_update": true,
     "company": null,
     "role": null,
     "stage": "UNKNOWN",
     "status": "UNKNOWN",
-    "next_action": null
+    "next_action": null,
+    "deadline": null
 }}
 
 EMAIL
@@ -157,27 +175,41 @@ Body:
                         "content": prompt
                     }
                 ],
-                response_format={"type": "json_object"},
+                response_format={
+                    "type": "json_object"
+                },
                 temperature=0
             )
 
-            response = completion.choices[0].message.content
+            response = (
+                completion
+                .choices[0]
+                .message
+                .content
+            )
 
             return json.loads(response)
 
         except Exception as error:
             error_text = str(error)
 
-            if "429" in error_text and attempt < 4:
+            if (
+                "429" in error_text
+                and attempt < 4
+            ):
                 wait_time = 3 * (attempt + 1)
 
                 print(
-                    f"  Groq rate limit hit. "
+                    f"  Rate limit hit. "
                     f"Waiting {wait_time} seconds..."
                 )
 
                 time.sleep(wait_time)
                 continue
 
-            print(f"Groq classification error: {error}")
+            print(
+                f"Groq classification error: "
+                f"{error}"
+            )
+
             return None

@@ -1,3 +1,6 @@
+import time
+
+
 BLOCKED_SENDERS = [
     "lensa.com",
     "swelist.com",
@@ -37,7 +40,31 @@ APPLICATION_KEYWORDS = [
 ]
 
 
-def is_likely_application_email(email, user_email):
+def execute_with_retry(request, attempts=5):
+    for attempt in range(attempts):
+        try:
+            return request.execute(
+                num_retries=3
+            )
+
+        except (TimeoutError, OSError):
+            if attempt == attempts - 1:
+                raise
+
+            wait_time = 2 ** attempt
+
+            print(
+                f"  Gmail connection timed out. "
+                f"Retrying in {wait_time}s..."
+            )
+
+            time.sleep(wait_time)
+
+
+def is_likely_application_email(
+    email,
+    user_email
+):
     sender = email["from"].lower()
     subject = email["subject"].lower()
 
@@ -45,50 +72,72 @@ def is_likely_application_email(email, user_email):
     if user_email.lower() in sender:
         return False
 
-    # Ignore known job-alert/newsletter sites
+    # Ignore obvious job alert/newsletter sites
     for blocked_sender in BLOCKED_SENDERS:
         if blocked_sender in sender:
             return False
 
-    # Ignore obvious newsletters / irrelevant messages
+    # Ignore irrelevant subjects
     for phrase in BLOCKED_SUBJECT_PHRASES:
         if phrase in subject:
             return False
 
-    # Keep emails that appear related to an actual application process
+    # Keep messages that appear related
+    # to an actual recruiting process
     for keyword in APPLICATION_KEYWORDS:
-        if keyword in subject or keyword in sender:
+        if (
+            keyword in subject
+            or keyword in sender
+        ):
             return True
 
     return False
 
 
-def find_application_emails(service, user_email, max_results=200):
+def find_application_emails(
+    service,
+    user_email,
+    max_results=200
+):
     query = (
         'newer_than:3m '
-        '(intern OR internship OR application OR interview '
-        'OR assessment OR recruiter OR candidate OR hiring)'
+        '(intern OR internship OR application '
+        'OR interview OR assessment '
+        'OR recruiter OR candidate OR hiring)'
     )
 
     messages = []
     page_token = None
 
     while len(messages) < max_results:
-        result = (
+        request = (
             service.users()
             .messages()
             .list(
                 userId="me",
                 q=query,
-                maxResults=min(100, max_results - len(messages)),
+                maxResults=min(
+                    100,
+                    max_results - len(messages)
+                ),
                 pageToken=page_token
             )
-            .execute()
         )
 
-        messages.extend(result.get("messages", []))
+        result = execute_with_retry(
+            request
+        )
 
-        page_token = result.get("nextPageToken")
+        messages.extend(
+            result.get(
+                "messages",
+                []
+            )
+        )
+
+        page_token = result.get(
+            "nextPageToken"
+        )
 
         if not page_token:
             break
@@ -96,19 +145,32 @@ def find_application_emails(service, user_email, max_results=200):
     emails = []
 
     for message in messages:
-        data = (
+        request = (
             service.users()
             .messages()
             .get(
                 userId="me",
                 id=message["id"],
                 format="metadata",
-                metadataHeaders=["From", "Subject", "Date"]
+                metadataHeaders=[
+                    "From",
+                    "Subject",
+                    "Date"
+                ]
             )
-            .execute()
         )
 
-        headers = data["payload"].get("headers", [])
+        data = execute_with_retry(
+            request
+        )
+
+        headers = (
+            data["payload"]
+            .get(
+                "headers",
+                []
+            )
+        )
 
         email_info = {
             "id": message["id"],
@@ -118,8 +180,15 @@ def find_application_emails(service, user_email, max_results=200):
         }
 
         for header in headers:
-            name = header.get("name", "")
-            value = header.get("value", "")
+            name = header.get(
+                "name",
+                ""
+            )
+
+            value = header.get(
+                "value",
+                ""
+            )
 
             if name == "From":
                 email_info["from"] = value
@@ -130,7 +199,12 @@ def find_application_emails(service, user_email, max_results=200):
             elif name == "Date":
                 email_info["date"] = value
 
-        if is_likely_application_email(email_info, user_email):
-            emails.append(email_info)
+        if is_likely_application_email(
+            email_info,
+            user_email
+        ):
+            emails.append(
+                email_info
+            )
 
     return emails
